@@ -11,44 +11,35 @@ power.direction = digitalio.Direction.OUTPUT
 power.value = True
 
 # 2. LED Setup (60 LEDs)
-pixels = neopixel.NeoPixel(board.EXTERNAL_NEOPIXELS, 60, brightness=0.5, auto_write=False)
+NUM_LEDS = 60
+pixels = neopixel.NeoPixel(board.EXTERNAL_NEOPIXELS, NUM_LEDS, brightness=1.0, auto_write=False)
 
 # 3. Sensor Setup
 i2c = board.I2C()
 accel = adafruit_lis3dh.LIS3DH_I2C(i2c)
 
-# --- SETTINGS ---
-PURPLE = (180, 0, 255)
-BRAKE_RED = (255, 0, 0)
-BRAKE_THRESHOLD = 20.0  # Sharp impact
-MOVE_THRESHOLD = 4.0     # Sensitivity to wiggles (lower = more sensitive)
-IDLE_TIMEOUT = 10.0      # Seconds until power-off
+# --- COLORS ---
+COLOR_START = (180, 0, 255)  # Start of strip: Deep Purple
+COLOR_END   = (0, 255, 255)  # End of strip: Electric Cyan
+BRAKE_RED   = (255, 0, 0)
 
-# Variables for Delta Math
+# Settings
 last_x, last_y, last_z = accel.acceleration
 last_move_time = time.monotonic()
 pulse_index = 0.0
 
-print("--- Woom-Glow: Delta-Motion System ONLINE ---")
+print("--- Woom-Glow: Gradient Verified ---")
 
 while True:
     now = time.monotonic()
     x, y, z = accel.acceleration
     
-    # --- DELTA MATH (The Secret Sauce) ---
-    # We calculate how much the acceleration CHANGED since the last loop
-    # This ignores gravity because gravity is constant!
-    dx = abs(x - last_x)
-    dy = abs(y - last_y)
-    dz = abs(z - last_z)
-    vibration = dx + dy + dz
-    
-    # Save current values for the next loop
+    # Delta Math
+    vibration = abs(x - last_x) + abs(y - last_y) + abs(z - last_z)
     last_x, last_y, last_z = x, y, z
 
-    # 1. BRAKE CHECK (High Priority)
-    if vibration > BRAKE_THRESHOLD:
-        print(f"BRAKE! Delta: {vibration:.2f}")
+    # 1. BRAKE CHECK
+    if vibration > 22.0:
         pixels.fill(BRAKE_RED)
         pixels.show()
         last_move_time = now
@@ -57,29 +48,43 @@ while True:
         pixels.show()
         time.sleep(0.05)
 
-    # 2. MOVEMENT CHECK
-    elif vibration > MOVE_THRESHOLD:
-        # Bike is moving or being touched
+    # 2. MOVING STATE (Professional Bounce / Ping-Pong)
+    elif vibration > 4.0:
         last_move_time = now
-        pulse_index += 0.05
-        breath = (math.sin(pulse_index) + 1) / 4 + 0.1
-        pixels.fill((int(PURPLE[0]*breath), int(PURPLE[1]*breath), int(PURPLE[2]*breath)))
+        
+        # INCREASE for faster bounce (0.05 is a smooth sweep)
+        BOUNCE_SPEED = 0.36
+        pulse_index += BOUNCE_SPEED 
+        
+        # Triangle Wave math: converts pulse_index into a position (0 to 59)
+        # This creates the "Ping-Pong" back and forth motion
+        ping_pong = (math.asin(math.sin(pulse_index)) / (math.pi / 2) + 1) / 2
+        leader_pixel = ping_pong * (NUM_LEDS - 1)
+        
+        for i in range(NUM_LEDS):
+            # Calculate distance from the "leader" to create a soft glow
+            dist = abs(i - leader_pixel)
+            
+            # If the pixel is close to the leader, make it bright
+            # Adjust '5.0' to make the "bounce" wider or narrower
+            if dist < 8.0:
+                falloff = 1.0 - (dist / 8.0)
+                # Saturated Deep Purple (no green!)
+                r = int(180 * falloff)
+                g = 0 
+                b = int(255 * falloff)
+            else:
+                # Dim background purple so the bike isn't dark
+                r, g, b = (20, 0, 40)
+            
+            pixels[i] = (r, g, b)
+        
         pixels.show()
-        print(f"MOVING - Delta: {vibration:.2f} | Time Left: {IDLE_TIMEOUT:.1f}")
 
-    # 3. IDLE / PARKED CHECK
+    # 3. PARKED CHECK
     else:
-        time_elapsed = now - last_move_time
-        if time_elapsed > IDLE_TIMEOUT:
-            # Fully Parked - Turn off
+        if now - last_move_time > 10.0:
             pixels.fill((0, 0, 0))
             pixels.show()
-        else:
-            # Cooling down - Slow Purple
-            pulse_index += 0.02
-            breath = (math.sin(pulse_index) + 1) / 6 + 0.05
-            pixels.fill((int(PURPLE[0]*breath), int(PURPLE[1]*breath), int(PURPLE[2]*breath)))
-            pixels.show()
-            # print(f"IDLE - Delta: {vibration:.2f} | Time Left: {IDLE_TIMEOUT - time_elapsed:.1f}")
 
-    time.sleep(0.05) # Slightly slower loop for better delta stability
+    time.sleep(0.02)
